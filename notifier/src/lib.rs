@@ -3,11 +3,10 @@ extern crate notify;
 use notify::{watcher, RecursiveMode, Watcher};
 use std::sync::mpsc::channel;
 use std::time::Duration;
-
+use std::os::raw::c_int;
+use std::panic::catch_unwind;
 #[no_mangle]
-pub extern "C" fn print_string(cb: extern "C" fn() -> ()) {
-    println!("hello from rust");
-
+pub extern "C" fn watch_for_changes(cb: extern "C" fn() -> c_int) {
     // Create a channel to receive the events.
     let (tx, rx) = channel();
 
@@ -18,11 +17,19 @@ pub extern "C" fn print_string(cb: extern "C" fn() -> ()) {
     // Add a path to be watched. All files and directories at that path and
     // below will be monitored for changes.
     watcher
-        .watch("/Users/jasper/Desktop", RecursiveMode::Recursive)
+        .watch("/Users/stoeffel/nri/", RecursiveMode::Recursive)
         .unwrap();
 
     match rx.recv() {
-        Ok(_event) => cb(),
+        Ok(event) => {
+            println!("Event {:?}:", event);
+            match catch_unwind(|| cb()) {
+                Ok(o) => {
+                    println!("ok {:?}", o);
+                }
+                Err(msg) => println!("cb {:?}", msg),
+            };
+        }
         Err(e) => println!("watch error: {:?}", e),
     };
 }

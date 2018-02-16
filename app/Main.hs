@@ -2,7 +2,10 @@ import FLib
 import Protolude
 
 main :: IO ()
-main = mkCallback helloFromHs >>= printString
+main = do
+  cb <- mkCallback callback
+  watchForChanges cb
+  putText "done"
 
-helloFromHs :: IO ()
-helloFromHs = putText "hello from haskell"
+callback :: IO ()
+callback = putText "hello from haskell"
