@@ -41,7 +41,7 @@ foreign import ccall "wrapper" mkCallback ::
                (CString -> CString -> CString -> IO ()) ->
                  IO (FunPtr (CString -> CString -> CString -> IO ()))
 
-watch :: T.Text -> DurationInSecs -> (Event -> IO ()) -> IO ()
+watch :: T.Text -> (Event -> IO ()) -> IO ()
 watch path callback = do
   mVar <- newMVar Nothing
   cb <- mkCallback $ forkCallback mVar callback
