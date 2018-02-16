@@ -6,8 +6,9 @@ main = do
   watch "/Users/stoeffel/nri/noredink" callback
   putText "done"
 
-callback :: IO ()
-callback = do
-  putText "changed"
+callback :: Event -> IO ()
+callback event = do
+  putText "Callback"
+  print event
   threadDelay 10000000
   putText "done"
