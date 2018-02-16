@@ -8,8 +8,15 @@ For more information on how to write Haddock comments check the user guide:
 -}
 module FLib where
 
+import Control.Exception (bracket)
+import Control.Monad (when)
 import Foreign.C.String
+import Foreign.ForeignPtr
+import Foreign.Ptr
 import Protolude
 
 foreign import ccall unsafe "print_string" printString ::
-               CString -> IO ()
+               FunPtr (IO ()) -> IO ()
+
+foreign import ccall "wrapper" mkCallback ::
+               IO () -> IO (FunPtr (IO ()))
