@@ -1,3 +1,3 @@
 # hs-rf-notify
 
-add description of hs-rf-notify here
+Wraps this awesome rust library so you can use it in haskell. https://docs.rs/crate/notify

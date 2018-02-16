@@ -1,4 +1,4 @@
-import FLib
+import Notify
 import Protolude
 
 main :: IO ()

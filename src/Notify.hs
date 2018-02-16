@@ -1,12 +1,12 @@
 {-|
-Module      : FLib
-Description : FLib's main module
+Module      : Notify
+Description : Notify's main module
 
 This is a haddock comment describing your library
 For more information on how to write Haddock comments check the user guide:
 <https://www.haskell.org/haddock/doc/html/index.html>
 -}
-module FLib where
+module Notify where
 
 import Control.Concurrent
 import Control.Exception (bracket)
@@ -41,7 +41,7 @@ foreign import ccall "wrapper" mkCallback ::
                (CString -> CString -> CString -> IO ()) ->
                  IO (FunPtr (CString -> CString -> CString -> IO ()))
 
-watch :: T.Text -> (Event -> IO ()) -> IO ()
+watch :: T.Text -> DurationInSecs -> (Event -> IO ()) -> IO ()
 watch path callback = do
   mVar <- newMVar Nothing
   cb <- mkCallback $ forkCallback mVar callback
