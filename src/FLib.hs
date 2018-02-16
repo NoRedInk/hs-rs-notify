@@ -8,8 +8,10 @@ For more information on how to write Haddock comments check the user guide:
 -}
 module FLib where
 
+import Control.Concurrent
 import Control.Exception (bracket)
 import Control.Monad (when)
+import Data.Foldable
 import Data.Text as T
 import Foreign.C.String
 import Foreign.ForeignPtr
@@ -24,6 +26,14 @@ foreign import ccall "wrapper" mkCallback ::
 
 watch :: T.Text -> IO () -> IO ()
 watch path callback = do
-  cb <- mkCallback callback
+  mVar <- newMVar Nothing
+  cb <- mkCallback $ forkCallback mVar callback
   pathCStr <- newCString $ T.unpack path
   watchForChanges pathCStr cb
+
+forkCallback :: MVar (Maybe ThreadId) -> IO () -> IO ()
+forkCallback mVar cb = do
+  runningThread <- takeMVar mVar
+  _ <- traverse_ killThread runningThread
+  threadId <- forkIO cb
+  putMVar mVar (Just threadId)

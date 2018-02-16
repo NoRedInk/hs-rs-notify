@@ -7,4 +7,7 @@ main = do
   putText "done"
 
 callback :: IO ()
-callback = putText "changed"
+callback = do
+  putText "changed"
+  threadDelay 10000000
+  putText "done"
