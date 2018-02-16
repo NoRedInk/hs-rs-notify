@@ -15,7 +15,7 @@ import Foreign.ForeignPtr
 import Foreign.Ptr
 import Protolude
 
-foreign import ccall unsafe "watch_for_changes" watchForChanges ::
+foreign import ccall "watch_for_changes" watchForChanges ::
                FunPtr (IO ()) -> IO ()
 
 foreign import ccall "wrapper" mkCallback ::
