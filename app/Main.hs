@@ -3,9 +3,8 @@ import Protolude
 
 main :: IO ()
 main = do
-  cb <- mkCallback callback
-  watchForChanges cb
+  watch "/Users/stoeffel/nri/noredink" callback
   putText "done"
 
 callback :: IO ()
-callback = putText "hello from haskell"
+callback = putText "changed"

@@ -10,13 +10,20 @@ module FLib where
 
 import Control.Exception (bracket)
 import Control.Monad (when)
+import Data.Text as T
 import Foreign.C.String
 import Foreign.ForeignPtr
 import Foreign.Ptr
 import Protolude
 
 foreign import ccall "watch_for_changes" watchForChanges ::
-               FunPtr (IO ()) -> IO ()
+               CString -> FunPtr (IO ()) -> IO ()
 
 foreign import ccall "wrapper" mkCallback ::
                IO () -> IO (FunPtr (IO ()))
+
+watch :: T.Text -> IO () -> IO ()
+watch path callback = do
+  cb <- mkCallback callback
+  pathCStr <- newCString $ T.unpack path
+  watchForChanges pathCStr cb
