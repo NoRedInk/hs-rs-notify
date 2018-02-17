@@ -18,6 +18,10 @@ import Foreign.ForeignPtr
 import Foreign.Ptr
 import Protolude
 import System.FilePath
+import System.Posix.Process
+import System.Posix.Signals
+import System.Posix.Types (ProcessID)
+import System.Process
 
 data Event
   = NoticeWrite FilePath
@@ -41,29 +45,32 @@ foreign import ccall "wrapper" mkCallback ::
                (CString -> CString -> CString -> IO ()) ->
                  IO (FunPtr (CString -> CString -> CString -> IO ()))
 
-watch :: T.Text -> (Event -> IO ()) -> IO ()
-watch path callback = do
+watch :: T.Text -> [T.Text] -> (Event -> IO ()) -> IO ()
+watch path extensions callback = do
   mVar <- newMVar Nothing
-  cb <- mkCallback $ forkCallback mVar callback
+  cb <- mkCallback $ forkCallback mVar callback extensions
   pathCStr <- newCString $ T.unpack path
   watchForChanges pathCStr cb
 
 forkCallback ::
-     MVar (Maybe ThreadId)
+     MVar (Maybe ProcessID)
   -> (Event -> IO ())
+  -> [T.Text]
   -> CString
   -> CString
   -> CString
   -> IO ()
-forkCallback mVar cb eventC aC bC = do
+forkCallback mVar cb extensions eventC aC bC = do
   eventStr <- T.pack <$> peekCString eventC
   a <- T.pack <$> peekCString aC
   b <- T.pack <$> peekCString bC
   let event = toEvent eventStr a b
-  runningThread <- takeMVar mVar
-  _ <- traverse_ killThread runningThread
-  threadId <- forkIO (cb event)
-  putMVar mVar (Just threadId)
+  when (relevantEvent event extensions) $ do
+    runningProcess <- takeMVar mVar
+    traverse_ (signalProcess softwareTermination) runningProcess
+    traverse_ (getProcessStatus True False) runningProcess -- here be dragons, potentially
+    processId <- forkProcess (cb event)
+    putMVar mVar (Just processId)
 
 toEvent :: T.Text -> T.Text -> T.Text -> Event
 toEvent "NoticeWrite" _ b = NoticeWrite (T.unpack b)
@@ -81,3 +88,21 @@ toEvent "Error" msg path =
        "" -> Nothing
        _ -> Just (T.unpack path))
 toEvent _ _ _ = Unknown
+
+relevantEvent :: Event -> [T.Text] -> Bool
+relevantEvent event extensions =
+  case eventForFile event of
+    Just path -> elem (T.pack (takeExtension path)) extensions
+    Nothing -> False
+
+eventForFile :: Event -> Maybe FilePath
+eventForFile (NoticeWrite path) = Just path
+eventForFile (NoticeRemove path) = Just path
+eventForFile (Create path) = Just path
+eventForFile (Write path) = Just path
+eventForFile (Chmod path) = Just path
+eventForFile (Remove path) = Just path
+eventForFile (Rename _ path) = Just path
+eventForFile Rescan = Nothing
+eventForFile (Error _ maybePath) = maybePath
+eventForFile Unknown = Nothing

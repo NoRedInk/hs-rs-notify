@@ -3,7 +3,7 @@ import Protolude
 
 main :: IO ()
 main = do
-  watch "/Users/stoeffel/nri/noredink" callback
+  watch "/Users/stoeffel/nri/noredink" [".elm"] callback
   putText "done"
 
 callback :: Event -> IO ()
