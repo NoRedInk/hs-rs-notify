@@ -6,60 +6,45 @@ use notify::DebouncedEvent::*;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::os::raw::c_int;
-use std::path::PathBuf;
 #[no_mangle]
 pub extern "C" fn watch_for_changes(
     path_ptr: *const c_char,
-    cb: extern "C" fn(event: *const c_char, a: *const c_char, b: *const c_char) -> c_int,
+    debounce_in_secs: u64,
+    on_change: extern "C" fn(event_for_path: *const c_char) -> c_int,
+    on_error: extern "C" fn(msg: *const c_char) -> c_int,
 ) {
     unsafe {
         let (tx, rx) = channel();
-        let mut watcher = watcher(tx, Duration::from_secs(1)).unwrap();
+        let mut watcher = watcher(tx, Duration::from_secs(debounce_in_secs)).unwrap();
         let path = CStr::from_ptr(path_ptr).to_str().expect("Invalid path");
         watcher.watch(path, RecursiveMode::Recursive).unwrap();
 
         loop {
-            match rx.recv() {
-                Ok(event) => {
-                    let (event_str, a, b) = event_info_str(event);
-                    cb(
-                        CString::new(event_str).unwrap().as_ptr(),
-                        CString::new(a).unwrap().as_ptr(),
-                        CString::new(b).unwrap().as_ptr(),
-                    );
-                }
-                Err(e) => println!("watch error: {:?}", e),
+            match rx.recv()
+                .map_err(|err| err.to_string())
+                .and_then(|e| event_for_path(e).ok_or("unknown event".to_string()))
+            {
+                Ok(event) => on_change(CString::new(event).unwrap().as_ptr()),
+                Err(e) => on_error(
+                    CString::new(format!("watch error: {:?}", e))
+                        .unwrap()
+                        .as_ptr(),
+                ),
             };
         }
     }
 }
 
-fn event_info_str(event: DebouncedEvent) -> (String, String, String) {
+fn event_for_path(event: DebouncedEvent) -> Option<String> {
     match event {
-        NoticeWrite(path) => (
-            "NoticeWrite".to_string(),
-            String::new(),
-            path_to_string(path),
-        ),
-        NoticeRemove(path) => (
-            "NoticeRemove".to_string(),
-            String::new(),
-            path_to_string(path),
-        ),
-        Create(path) => ("Create".to_string(), String::new(), path_to_string(path)),
-        Write(path) => ("Write".to_string(), String::new(), path_to_string(path)),
-        Chmod(path) => ("Chmod".to_string(), String::new(), path_to_string(path)),
-        Remove(path) => ("Remove".to_string(), String::new(), path_to_string(path)),
-        Rename(from, to) => (
-            "Rename".to_string(),
-            path_to_string(from),
-            path_to_string(to),
-        ),
-        Rescan => ("Rescan".to_string(), String::new(), String::new()),
-        Error(msg, None) => ("Error".to_string(), msg.to_string(), String::new()),
-        Error(msg, Some(path)) => ("Error".to_string(), msg.to_string(), path_to_string(path)),
-    }
-}
-fn path_to_string(p: PathBuf) -> String {
-    p.to_str().unwrap_or("").to_string()
+        NoticeWrite(path) => Some(path),
+        NoticeRemove(path) => Some(path),
+        Create(path) => Some(path),
+        Write(path) => Some(path),
+        Chmod(path) => Some(path),
+        Remove(path) => Some(path),
+        Rename(_, to) => Some(to),
+        Rescan => None,
+        Error(_, path) => path,
+    }.map(|p| p.to_string_lossy().into_owned())
 }

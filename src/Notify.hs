@@ -1,108 +1,103 @@
 {-|
 Module      : Notify
-Description : Notify's main module
+Description : Filesystem notifications. This is a wrapper around rust's notify crate.
 
-This is a haddock comment describing your library
-For more information on how to write Haddock comments check the user guide:
-<https://www.haskell.org/haddock/doc/html/index.html>
 -}
-module Notify where
+module Notify
+  ( Config(..)
+  , State
+  , watch
+  , force
+  , end
+  ) where
 
 import Control.Concurrent
-import Control.Exception (bracket)
 import Control.Monad (when)
-import Data.Foldable
-import Data.Text as T
+import Data.Foldable (null, traverse_)
+import Data.Int
+import qualified Data.Text as T
 import Foreign.C.String
-import Foreign.ForeignPtr
+import Foreign.C.Types
+import Foreign.ForeignPtr ()
 import Foreign.Ptr
-import Protolude
+import Protolude hiding (State, force)
 import System.FilePath
 import System.Posix.Process
 import System.Posix.Signals
 import System.Posix.Types (ProcessID)
-import System.Process
-
-data Event
-  = NoticeWrite FilePath
-  | NoticeRemove FilePath
-  | Create FilePath
-  | Write FilePath
-  | Chmod FilePath
-  | Remove FilePath
-  | Rename FilePath
-           FilePath
-  | Rescan
-  | Error T.Text
-          (Maybe FilePath)
-  | Unknown
-  deriving (Show)
+import System.Process ()
 
 foreign import ccall "watch_for_changes" watchForChanges ::
-               CString -> FunPtr (CString -> CString -> CString -> IO ()) -> IO ()
+               CString ->
+                 CInt ->
+                   FunPtr (CString -> IO ()) -> FunPtr (CString -> IO ()) -> IO ()
 
 foreign import ccall "wrapper" mkCallback ::
-               (CString -> CString -> CString -> IO ()) ->
-                 IO (FunPtr (CString -> CString -> CString -> IO ()))
+               (CString -> IO ()) -> IO (FunPtr (CString -> IO ()))
 
-watch :: T.Text -> [T.Text] -> (Event -> IO ()) -> IO ()
-watch path extensions callback = do
+{-| Internal state of the watcher.
+We keep track of running processes and the config.
+You might need this if you want to use `end` or `force`.
+-}
+data State = State
+  { onChange :: IO ()
+  , mVar :: MVar (Maybe ProcessID)
+  }
+
+{-| Configuration for a watcher.
+-}
+data Config = Config
+  { pathToWatch :: FilePath -- Watch files recursivelly under this path.
+  , relevantExtensions :: [T.Text] -- Which extensions do we care about? Empty list will accept all.
+  , debounceInSecs :: Int -- Debounce next run by x seconds.
+  }
+
+watch :: Config -> IO () -> (T.Text -> IO ()) -> IO State
+watch config onChange onError = do
   mVar <- newMVar Nothing
-  cb <- mkCallback $ forkCallback mVar callback extensions
-  pathCStr <- newCString $ T.unpack path
-  watchForChanges pathCStr cb
+  let state = State {onChange = onChange, mVar = mVar}
+  _ <- forkIO (start mVar config onChange onError)
+  pure state
 
-forkCallback ::
-     MVar (Maybe ProcessID)
-  -> (Event -> IO ())
-  -> [T.Text]
-  -> CString
-  -> CString
-  -> CString
-  -> IO ()
-forkCallback mVar cb extensions eventC aC bC = do
-  eventStr <- T.pack <$> peekCString eventC
-  a <- T.pack <$> peekCString aC
-  b <- T.pack <$> peekCString bC
-  let event = toEvent eventStr a b
-  when (relevantEvent event extensions) $ do
-    runningProcess <- takeMVar mVar
-    traverse_ (signalProcess softwareTermination) runningProcess
-    traverse_ (getProcessStatus True False) runningProcess -- here be dragons, potentially
-    processId <- forkProcess (cb event)
-    putMVar mVar (Just processId)
+force :: State -> IO ()
+force State {mVar, onChange} = startProcess mVar onChange
 
-toEvent :: T.Text -> T.Text -> T.Text -> Event
-toEvent "NoticeWrite" _ b = NoticeWrite (T.unpack b)
-toEvent "NoticeRemove" _ b = NoticeRemove (T.unpack b)
-toEvent "Create" _ b = Create (T.unpack b)
-toEvent "Write" _ b = Write (T.unpack b)
-toEvent "Chmod" _ b = Chmod (T.unpack b)
-toEvent "Remove" _ b = Remove (T.unpack b)
-toEvent "Rename" a b = Rename (T.unpack a) (T.unpack b)
-toEvent "Rescan" _ _ = Rescan
-toEvent "Error" msg path =
-  Error
-    msg
-    (case path of
-       "" -> Nothing
-       _ -> Just (T.unpack path))
-toEvent _ _ _ = Unknown
+end :: State -> IO ()
+end State {mVar} = stopProcess mVar
 
-relevantEvent :: Event -> [T.Text] -> Bool
-relevantEvent event extensions =
-  case eventForFile event of
-    Just path -> elem (T.pack (takeExtension path)) extensions
-    Nothing -> False
+start :: MVar (Maybe ProcessID) -> Config -> IO () -> (T.Text -> IO ()) -> IO ()
+start mVar Config {pathToWatch, debounceInSecs, relevantExtensions} onChange onError = do
+  onChangeCb <- mkCallback $ callbackInProcess mVar onChange relevantExtensions
+  onErrorCb <- mkCallback $ onErrorCallback onError
+  pathCStr <- newCString pathToWatch
+  watchForChanges pathCStr (mkCInt debounceInSecs) onChangeCb onErrorCb
 
-eventForFile :: Event -> Maybe FilePath
-eventForFile (NoticeWrite path) = Just path
-eventForFile (NoticeRemove path) = Just path
-eventForFile (Create path) = Just path
-eventForFile (Write path) = Just path
-eventForFile (Chmod path) = Just path
-eventForFile (Remove path) = Just path
-eventForFile (Rename _ path) = Just path
-eventForFile Rescan = Nothing
-eventForFile (Error _ maybePath) = maybePath
-eventForFile Unknown = Nothing
+mkCInt :: Int -> CInt
+mkCInt = fromIntegral
+
+onErrorCallback :: (T.Text -> IO ()) -> CString -> IO ()
+onErrorCallback cb msgC = do
+  msg <- peekCString msgC
+  cb (T.pack msg)
+
+callbackInProcess ::
+     MVar (Maybe ProcessID) -> IO () -> [T.Text] -> CString -> IO ()
+callbackInProcess mVar cb relevantExtensions pathC = do
+  eventForPath <- peekCString pathC
+  when (isRelevant eventForPath relevantExtensions || null relevantExtensions) $
+    startProcess mVar cb
+
+startProcess :: MVar (Maybe ProcessID) -> IO () -> IO ()
+startProcess mVar cb = do
+  stopProcess mVar
+  processId <- forkProcess cb
+  putMVar mVar (Just processId)
+
+stopProcess :: MVar (Maybe ProcessID) -> IO ()
+stopProcess mVar = do
+  runningProcess <- takeMVar mVar
+  traverse_ (signalProcess softwareTermination) runningProcess
+  traverse_ (getProcessStatus True False) runningProcess -- here be dragons, potentially
+
+isRelevant :: FilePath -> [T.Text] -> Bool
+isRelevant path = elem (T.pack (takeExtension path))
